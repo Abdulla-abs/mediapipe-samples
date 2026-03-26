@@ -112,6 +112,7 @@ class PoseLandmarkerHelper(
             val optionsBuilder =
                 PoseLandmarker.PoseLandmarkerOptions.builder()
                     .setBaseOptions(baseOptions)
+                    .setNumPoses(DEFAULT_NUM_POSES)
                     .setMinPoseDetectionConfidence(minPoseDetectionConfidence)
                     .setMinTrackingConfidence(minPoseTrackingConfidence)
                     .setMinPosePresenceConfidence(minPosePresenceConfidence)

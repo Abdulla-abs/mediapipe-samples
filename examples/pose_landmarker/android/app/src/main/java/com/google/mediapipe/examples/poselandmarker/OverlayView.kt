@@ -93,7 +93,6 @@ class OverlayView(context: Context?, attrs: AttributeSet?) :
         runningMode: RunningMode = RunningMode.IMAGE
     ) {
         results = poseLandmarkerResults
-
         this.imageHeight = imageHeight
         this.imageWidth = imageWidth
 

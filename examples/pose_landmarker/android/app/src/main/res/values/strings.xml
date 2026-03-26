@@ -46,6 +46,8 @@
     <string name="label_delegate">Delegate</string>
     <string name="label_models">Model</string>
 
+    <string name="alt_flip_camera">Flip Camera</string>
+
     <string-array name="delegate_spinner_titles">
         <item>CPU</item>
         <item>GPU</item>

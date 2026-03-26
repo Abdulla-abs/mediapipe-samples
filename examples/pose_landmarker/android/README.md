@@ -8,6 +8,30 @@ The task file is downloaded by a Gradle script when you build and run the app. Y
 
 This application should be run on a physical Android device to take advantage of the camera.
 
+## Rule-based action events (front camera, on-device)
+
+This sample now includes a lightweight action recognition layer built on top of pose landmarks for single-player front-camera gameplay.
+
+- Real-time rule evaluation runs fully on-device (no server upload).
+- Stabilization includes EMA smoothing on `(x, y)` landmarks.
+- Event triggering uses consecutive-frame confirmation (`holdFrames`) to reduce jitter retriggers.
+- Thresholds are normalized by body scale (shoulder/torso distance) to reduce sensitivity to camera distance.
+
+Recognized events exposed to game logic:
+
+- Left/right arm raise start
+- Left/right arm lower start
+- Left/right arm wave start
+- Left/right arm wave end
+
+Event model and recognizer implementation:
+
+- `app/src/main/java/com/google/mediapipe/examples/poselandmarker/recognition/PoseRecognitionModels.kt`
+- `app/src/main/java/com/google/mediapipe/examples/poselandmarker/recognition/RulePoseRecognizer.kt`
+- `app/src/main/java/com/google/mediapipe/examples/poselandmarker/recognition/GameEventDispatcher.kt`
+
+The camera fragment enforces the front camera path and dispatches recognized `PoseActionEvent` objects through `GameEventDispatcher`.
+
 ![Pose Landmarker Demo](pose_landmarker.png?raw=true "Pose Landmarker Demo")
 [Public domain video from Lance Foss](https://www.youtube.com/watch?v=KALIKOd1pbA)
 

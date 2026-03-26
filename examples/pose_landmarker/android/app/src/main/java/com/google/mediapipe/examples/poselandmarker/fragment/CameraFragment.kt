@@ -18,6 +18,8 @@ package com.google.mediapipe.examples.poselandmarker.fragment
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -32,15 +34,24 @@ import androidx.camera.core.Camera
 import androidx.camera.core.AspectRatio
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.navigation.Navigation
 import com.google.mediapipe.examples.poselandmarker.PoseLandmarkerHelper
 import com.google.mediapipe.examples.poselandmarker.MainViewModel
 import com.google.mediapipe.examples.poselandmarker.R
+import com.google.mediapipe.examples.poselandmarker.recognition.GameEventDispatcher
+import com.google.mediapipe.examples.poselandmarker.recognition.PoseActionEvent
+import com.google.mediapipe.examples.poselandmarker.recognition.PoseActionType
+import com.google.mediapipe.examples.poselandmarker.recognition.PoseActionEventListener
+import com.google.mediapipe.examples.poselandmarker.recognition.RulePoseRecognizer
 import com.google.mediapipe.examples.poselandmarker.databinding.FragmentCameraBinding
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import java.util.Locale
+import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -49,6 +60,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
 
     companion object {
         private const val TAG = "Pose Landmarker"
+        private const val EVENT_DISPLAY_DURATION_MS = 1000L
     }
 
     private var _fragmentCameraBinding: FragmentCameraBinding? = null
@@ -62,7 +74,16 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     private var imageAnalyzer: ImageAnalysis? = null
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var cameraFacing = CameraSelector.LENS_FACING_BACK
+    private var cameraFacing = CameraSelector.LENS_FACING_FRONT
+    private lateinit var rulePoseRecognizer: RulePoseRecognizer
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val eventQueue = ArrayDeque<PoseActionEvent>()
+    private val eventQueueLock = Any()
+    private var isDisplayingEvent = false
+    private val gameEventLogListener = PoseActionEventListener { event ->
+        Log.i(TAG, "GameActionEvent: ${event.type} side=${event.side} ts=${event.timestampMs}")
+        enqueueEventForDisplay(event)
+    }
 
     /** Blocking ML operations are performed using this executor */
     private lateinit var backgroundExecutor: ExecutorService
@@ -80,7 +101,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
         // Start the PoseLandmarkerHelper again when users come back
         // to the foreground.
         backgroundExecutor.execute {
-            if(this::poseLandmarkerHelper.isInitialized) {
+            if (this::poseLandmarkerHelper.isInitialized) {
                 if (poseLandmarkerHelper.isClose()) {
                     poseLandmarkerHelper.setupPoseLandmarker()
                 }
@@ -90,11 +111,13 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
 
     override fun onPause() {
         super.onPause()
-        if(this::poseLandmarkerHelper.isInitialized) {
+        clearEventDisplayState()
+        if (this::poseLandmarkerHelper.isInitialized) {
             viewModel.setMinPoseDetectionConfidence(poseLandmarkerHelper.minPoseDetectionConfidence)
             viewModel.setMinPoseTrackingConfidence(poseLandmarkerHelper.minPoseTrackingConfidence)
             viewModel.setMinPosePresenceConfidence(poseLandmarkerHelper.minPosePresenceConfidence)
             viewModel.setDelegate(poseLandmarkerHelper.currentDelegate)
+            viewModel.setCameraFacing(cameraFacing)
 
             // Close the PoseLandmarkerHelper and release resources
             backgroundExecutor.execute { poseLandmarkerHelper.clearPoseLandmarker() }
@@ -102,6 +125,8 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     }
 
     override fun onDestroyView() {
+        clearEventDisplayState()
+        GameEventDispatcher.removeListener(gameEventLogListener)
         _fragmentCameraBinding = null
         super.onDestroyView()
 
@@ -127,6 +152,12 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        cameraFacing = CameraSelector.LENS_FACING_FRONT
+        viewModel.setCameraFacing(cameraFacing)
+        rulePoseRecognizer = RulePoseRecognizer()
+        GameEventDispatcher.addListener(gameEventLogListener)
+        applyEventBannerInsets()
+
         // Initialize our background executor
         backgroundExecutor = Executors.newSingleThreadExecutor()
 
@@ -151,6 +182,24 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
 
         // Attach listeners to UI control widgets
         initBottomSheetControls()
+        initCameraControls()
+    }
+
+    private fun initCameraControls() {
+        fragmentCameraBinding.cameraFlipButton.visibility = View.GONE
+    }
+
+    private fun applyEventBannerInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(fragmentCameraBinding.eventQueueText) { view, insets ->
+            val statusTopInset = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            val extraTopSpacing = resources.getDimensionPixelSize(R.dimen.event_queue_top_spacing)
+
+            view.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = statusTopInset + extraTopSpacing
+            }
+            insets
+        }
+        ViewCompat.requestApplyInsets(fragmentCameraBinding.eventQueueText)
     }
 
     private fun initBottomSheetControls() {
@@ -171,49 +220,61 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
 
         // When clicked, lower pose detection score threshold floor
         fragmentCameraBinding.bottomSheetLayout.detectionThresholdMinus.setOnClickListener {
-            if (poseLandmarkerHelper.minPoseDetectionConfidence >= 0.2) {
-                poseLandmarkerHelper.minPoseDetectionConfidence -= 0.1f
-                updateControlsUi()
+            if (this::poseLandmarkerHelper.isInitialized) {
+                if (poseLandmarkerHelper.minPoseDetectionConfidence >= 0.2) {
+                    poseLandmarkerHelper.minPoseDetectionConfidence -= 0.1f
+                    updateControlsUi()
+                }
             }
         }
 
         // When clicked, raise pose detection score threshold floor
         fragmentCameraBinding.bottomSheetLayout.detectionThresholdPlus.setOnClickListener {
-            if (poseLandmarkerHelper.minPoseDetectionConfidence <= 0.8) {
-                poseLandmarkerHelper.minPoseDetectionConfidence += 0.1f
-                updateControlsUi()
+            if (this::poseLandmarkerHelper.isInitialized) {
+                if (poseLandmarkerHelper.minPoseDetectionConfidence <= 0.8) {
+                    poseLandmarkerHelper.minPoseDetectionConfidence += 0.1f
+                    updateControlsUi()
+                }
             }
         }
 
         // When clicked, lower pose tracking score threshold floor
         fragmentCameraBinding.bottomSheetLayout.trackingThresholdMinus.setOnClickListener {
-            if (poseLandmarkerHelper.minPoseTrackingConfidence >= 0.2) {
-                poseLandmarkerHelper.minPoseTrackingConfidence -= 0.1f
-                updateControlsUi()
+            if (this::poseLandmarkerHelper.isInitialized) {
+                if (poseLandmarkerHelper.minPoseTrackingConfidence >= 0.2) {
+                    poseLandmarkerHelper.minPoseTrackingConfidence -= 0.1f
+                    updateControlsUi()
+                }
             }
         }
 
         // When clicked, raise pose tracking score threshold floor
         fragmentCameraBinding.bottomSheetLayout.trackingThresholdPlus.setOnClickListener {
-            if (poseLandmarkerHelper.minPoseTrackingConfidence <= 0.8) {
-                poseLandmarkerHelper.minPoseTrackingConfidence += 0.1f
-                updateControlsUi()
+            if (this::poseLandmarkerHelper.isInitialized) {
+                if (poseLandmarkerHelper.minPoseTrackingConfidence <= 0.8) {
+                    poseLandmarkerHelper.minPoseTrackingConfidence += 0.1f
+                    updateControlsUi()
+                }
             }
         }
 
         // When clicked, lower pose presence score threshold floor
         fragmentCameraBinding.bottomSheetLayout.presenceThresholdMinus.setOnClickListener {
-            if (poseLandmarkerHelper.minPosePresenceConfidence >= 0.2) {
-                poseLandmarkerHelper.minPosePresenceConfidence -= 0.1f
-                updateControlsUi()
+            if (this::poseLandmarkerHelper.isInitialized) {
+                if (poseLandmarkerHelper.minPosePresenceConfidence >= 0.2) {
+                    poseLandmarkerHelper.minPosePresenceConfidence -= 0.1f
+                    updateControlsUi()
+                }
             }
         }
 
         // When clicked, raise pose presence score threshold floor
         fragmentCameraBinding.bottomSheetLayout.presenceThresholdPlus.setOnClickListener {
-            if (poseLandmarkerHelper.minPosePresenceConfidence <= 0.8) {
-                poseLandmarkerHelper.minPosePresenceConfidence += 0.1f
-                updateControlsUi()
+            if (this::poseLandmarkerHelper.isInitialized) {
+                if (poseLandmarkerHelper.minPosePresenceConfidence <= 0.8) {
+                    poseLandmarkerHelper.minPosePresenceConfidence += 0.1f
+                    updateControlsUi()
+                }
             }
         }
 
@@ -227,11 +288,9 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
                 override fun onItemSelected(
                     p0: AdapterView<*>?, p1: View?, p2: Int, p3: Long
                 ) {
-                    try {
+                    if (this@CameraFragment::poseLandmarkerHelper.isInitialized) {
                         poseLandmarkerHelper.currentDelegate = p2
                         updateControlsUi()
-                    } catch(e: UninitializedPropertyAccessException) {
-                        Log.e(TAG, "PoseLandmarkerHelper has not been initialized yet.")
                     }
                 }
 
@@ -253,8 +312,10 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
                     p2: Int,
                     p3: Long
                 ) {
-                    poseLandmarkerHelper.currentModel = p2
-                    updateControlsUi()
+                    if (this@CameraFragment::poseLandmarkerHelper.isInitialized) {
+                        poseLandmarkerHelper.currentModel = p2
+                        updateControlsUi()
+                    }
                 }
 
                 override fun onNothingSelected(p0: AdapterView<*>?) {
@@ -266,7 +327,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     // Update the values displayed in the bottom sheet. Reset Poselandmarker
     // helper.
     private fun updateControlsUi() {
-        if(this::poseLandmarkerHelper.isInitialized) {
+        if (this::poseLandmarkerHelper.isInitialized) {
             fragmentCameraBinding.bottomSheetLayout.detectionThresholdValue.text =
                 String.format(
                     Locale.US,
@@ -296,7 +357,6 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
         }
     }
 
-    // Initialize CameraX, and prepare to bind the camera use cases
     private fun setUpCamera() {
         val cameraProviderFuture =
             ProcessCameraProvider.getInstance(requireContext())
@@ -319,6 +379,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
         val cameraProvider = cameraProvider
             ?: throw IllegalStateException("Camera initialization failed.")
 
+        // CameraSelector
         val cameraSelector =
             CameraSelector.Builder().requireLensFacing(cameraFacing).build()
 
@@ -359,11 +420,13 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     }
 
     private fun detectPose(imageProxy: ImageProxy) {
-        if(this::poseLandmarkerHelper.isInitialized) {
+        if (this::poseLandmarkerHelper.isInitialized) {
             poseLandmarkerHelper.detectLiveStream(
                 imageProxy = imageProxy,
                 isFrontCamera = cameraFacing == CameraSelector.LENS_FACING_FRONT
             )
+        } else {
+            imageProxy.close()
         }
     }
 
@@ -373,20 +436,23 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
             fragmentCameraBinding.viewFinder.display.rotation
     }
 
-    // Update UI after pose have been detected. Extracts original
-    // image height/width to scale and place the landmarks properly through
-    // OverlayView
+    // Update UI after pose have been detected. Refresh analysis result
     override fun onResults(
         resultBundle: PoseLandmarkerHelper.ResultBundle
     ) {
+        val poseResult = resultBundle.results.firstOrNull() ?: return
+        val events = rulePoseRecognizer.process(
+            result = poseResult,
+            isFrontCamera = cameraFacing == CameraSelector.LENS_FACING_FRONT
+        )
+        events.forEach(::dispatchGameEvent)
+
         activity?.runOnUiThread {
             if (_fragmentCameraBinding != null) {
                 fragmentCameraBinding.bottomSheetLayout.inferenceTimeVal.text =
                     String.format("%d ms", resultBundle.inferenceTime)
-
-                // Pass necessary information to OverlayView for drawing on the canvas
                 fragmentCameraBinding.overlay.setResults(
-                    resultBundle.results.first(),
+                    poseResult,
                     resultBundle.inputImageHeight,
                     resultBundle.inputImageWidth,
                     RunningMode.LIVE_STREAM
@@ -408,4 +474,75 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
             }
         }
     }
+
+    private fun dispatchGameEvent(event: PoseActionEvent) {
+        GameEventDispatcher.dispatch(event)
+    }
+
+    private fun enqueueEventForDisplay(event: PoseActionEvent) {
+        val shouldStartDisplay: Boolean
+        synchronized(eventQueueLock) {
+            eventQueue.addLast(event)
+            shouldStartDisplay = !isDisplayingEvent
+            if (shouldStartDisplay) {
+                isDisplayingEvent = true
+            }
+        }
+
+        if (shouldStartDisplay) {
+            showNextEventFromQueue()
+        }
+    }
+
+    private fun showNextEventFromQueue() {
+        mainHandler.post {
+            val nextEvent = synchronized(eventQueueLock) {
+                if (eventQueue.isEmpty()) {
+                    isDisplayingEvent = false
+                    null
+                } else {
+                    eventQueue.removeFirst()
+                }
+            }
+
+            val binding = _fragmentCameraBinding ?: return@post
+            if (nextEvent == null) {
+                binding.eventQueueText.text = ""
+                binding.eventQueueText.visibility = View.GONE
+                return@post
+            }
+
+            binding.eventQueueText.text = formatEvent(nextEvent)
+            binding.eventQueueText.visibility = View.VISIBLE
+
+            mainHandler.postDelayed({
+                val currentBinding = _fragmentCameraBinding
+                currentBinding?.eventQueueText?.text = ""
+                currentBinding?.eventQueueText?.visibility = View.GONE
+                showNextEventFromQueue()
+            }, EVENT_DISPLAY_DURATION_MS)
+        }
+    }
+
+    private fun clearEventDisplayState() {
+        mainHandler.removeCallbacksAndMessages(null)
+        synchronized(eventQueueLock) {
+            eventQueue.clear()
+            isDisplayingEvent = false
+        }
+        _fragmentCameraBinding?.eventQueueText?.text = ""
+        _fragmentCameraBinding?.eventQueueText?.visibility = View.GONE
+    }
+
+    private fun formatEvent(event: PoseActionEvent): String {
+        val side = if (event.side.name == "LEFT") "LEFT" else "RIGHT"
+        val action = when (event.type) {
+            PoseActionType.ARM_RAISE_START -> "抬手开始"
+            PoseActionType.ARM_LOWER_START -> "放下开始"
+            PoseActionType.ARM_WAVE_START -> "挥动开始"
+            PoseActionType.ARM_WAVE_END -> "挥动结束"
+        }
+        return "$side $action"
+    }
+
 }

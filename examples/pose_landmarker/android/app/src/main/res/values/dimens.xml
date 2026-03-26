@@ -30,4 +30,5 @@
 
     <integer name="bottom_sheet_control_text_min_ems">3</integer>
     <dimen name="fab_margin">16dp</dimen>
+    <dimen name="event_queue_top_spacing">12dp</dimen>
 </resources>
