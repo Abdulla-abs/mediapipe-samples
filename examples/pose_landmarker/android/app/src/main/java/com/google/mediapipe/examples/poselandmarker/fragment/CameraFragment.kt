@@ -20,11 +20,14 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.TypedValue
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.camera.core.Preview
 import androidx.camera.core.CameraSelector
@@ -51,7 +54,7 @@ import com.google.mediapipe.examples.poselandmarker.recognition.RulePoseRecogniz
 import com.google.mediapipe.examples.poselandmarker.databinding.FragmentCameraBinding
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import java.util.Locale
-import java.util.ArrayDeque
+import java.util.LinkedHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -77,9 +80,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     private var cameraFacing = CameraSelector.LENS_FACING_FRONT
     private lateinit var rulePoseRecognizer: RulePoseRecognizer
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val eventQueue = ArrayDeque<PoseActionEvent>()
-    private val eventQueueLock = Any()
-    private var isDisplayingEvent = false
+    private val activeEventRemovalCallbacks = LinkedHashMap<View, Runnable>()
     private val gameEventLogListener = PoseActionEventListener { event ->
         Log.i(TAG, "GameActionEvent: ${event.type} side=${event.side} ts=${event.timestampMs}")
         enqueueEventForDisplay(event)
@@ -190,7 +191,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     }
 
     private fun applyEventBannerInsets() {
-        ViewCompat.setOnApplyWindowInsetsListener(fragmentCameraBinding.eventQueueText) { view, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(fragmentCameraBinding.eventQueueContainer) { view, insets ->
             val statusTopInset = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
             val extraTopSpacing = resources.getDimensionPixelSize(R.dimen.event_queue_top_spacing)
 
@@ -199,7 +200,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
             }
             insets
         }
-        ViewCompat.requestApplyInsets(fragmentCameraBinding.eventQueueText)
+        ViewCompat.requestApplyInsets(fragmentCameraBinding.eventQueueContainer)
     }
 
     private fun initBottomSheetControls() {
@@ -480,62 +481,62 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     }
 
     private fun enqueueEventForDisplay(event: PoseActionEvent) {
-        val shouldStartDisplay: Boolean
-        synchronized(eventQueueLock) {
-            eventQueue.addLast(event)
-            shouldStartDisplay = !isDisplayingEvent
-            if (shouldStartDisplay) {
-                isDisplayingEvent = true
-            }
-        }
-
-        if (shouldStartDisplay) {
-            showNextEventFromQueue()
-        }
-    }
-
-    private fun showNextEventFromQueue() {
         mainHandler.post {
-            val nextEvent = synchronized(eventQueueLock) {
-                if (eventQueue.isEmpty()) {
-                    isDisplayingEvent = false
-                    null
-                } else {
-                    eventQueue.removeFirst()
-                }
-            }
-
             val binding = _fragmentCameraBinding ?: return@post
-            if (nextEvent == null) {
-                binding.eventQueueText.text = ""
-                binding.eventQueueText.visibility = View.GONE
-                return@post
+            val eventView = createEventBannerView(formatEvent(event))
+            binding.eventQueueContainer.addView(eventView)
+            binding.eventQueueContainer.visibility = View.VISIBLE
+
+            val removalRunnable = Runnable {
+                removeEventBanner(eventView)
             }
-
-            binding.eventQueueText.text = formatEvent(nextEvent)
-            binding.eventQueueText.visibility = View.VISIBLE
-
-            mainHandler.postDelayed({
-                val currentBinding = _fragmentCameraBinding
-                currentBinding?.eventQueueText?.text = ""
-                currentBinding?.eventQueueText?.visibility = View.GONE
-                showNextEventFromQueue()
-            }, EVENT_DISPLAY_DURATION_MS)
+            activeEventRemovalCallbacks[eventView] = removalRunnable
+            mainHandler.postDelayed(removalRunnable, EVENT_DISPLAY_DURATION_MS)
         }
     }
 
     private fun clearEventDisplayState() {
-        mainHandler.removeCallbacksAndMessages(null)
-        synchronized(eventQueueLock) {
-            eventQueue.clear()
-            isDisplayingEvent = false
+        mainHandler.post {
+            activeEventRemovalCallbacks.values.forEach(mainHandler::removeCallbacks)
+            activeEventRemovalCallbacks.clear()
+            _fragmentCameraBinding?.eventQueueContainer?.removeAllViews()
+            _fragmentCameraBinding?.eventQueueContainer?.visibility = View.GONE
         }
-        _fragmentCameraBinding?.eventQueueText?.text = ""
-        _fragmentCameraBinding?.eventQueueText?.visibility = View.GONE
+    }
+
+    private fun createEventBannerView(message: String): TextView {
+        return TextView(requireContext()).apply {
+            text = message
+            visibility = View.VISIBLE
+            setTextColor(ContextCompat.getColor(context, android.R.color.white))
+            setBackgroundColor(0x99000000.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setPaddingRelative(
+                resources.getDimensionPixelSize(R.dimen.event_queue_item_horizontal_padding),
+                resources.getDimensionPixelSize(R.dimen.event_queue_item_vertical_padding),
+                resources.getDimensionPixelSize(R.dimen.event_queue_item_horizontal_padding),
+                resources.getDimensionPixelSize(R.dimen.event_queue_item_vertical_padding)
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = resources.getDimensionPixelSize(R.dimen.event_queue_item_spacing)
+            }
+        }
+    }
+
+    private fun removeEventBanner(eventView: View) {
+        activeEventRemovalCallbacks.remove(eventView)?.let(mainHandler::removeCallbacks)
+        val binding = _fragmentCameraBinding ?: return
+        binding.eventQueueContainer.removeView(eventView)
+        if (binding.eventQueueContainer.childCount == 0) {
+            binding.eventQueueContainer.visibility = View.GONE
+        }
     }
 
     private fun formatEvent(event: PoseActionEvent): String {
-        val side = if (event.side.name == "LEFT") "LEFT" else "RIGHT"
+        val side = if (event.side.name == "LEFT") "左侧" else "右侧"
         val action = when (event.type) {
             PoseActionType.ARM_RAISE_START -> "抬手开始"
             PoseActionType.ARM_LOWER_START -> "放下开始"
