@@ -40,12 +40,12 @@ class PoseLandmarkerHelper(
     var currentDelegate: Int = DELEGATE_CPU,
     var runningMode: RunningMode = RunningMode.IMAGE,
     val context: Context,
-    // this listener is only used when running in RunningMode.LIVE_STREAM
+    // 此监听器仅在 RunningMode.LIVE_STREAM 模式下使用
     val poseLandmarkerHelperListener: LandmarkerListener? = null
 ) {
 
-    // For this example this needs to be a var so it can be reset on changes.
-    // If the Pose Landmarker will not change, a lazy val would be preferable.
+    // 在此示例中需要使用 var 以便在更改时重置。
+    // 如果姿态标记器不会改变，使用 lazy val 会更合适。
     private var poseLandmarker: PoseLandmarker? = null
 
     init {
@@ -57,21 +57,17 @@ class PoseLandmarkerHelper(
         poseLandmarker = null
     }
 
-    // Return running status of PoseLandmarkerHelper
+    // 返回 PoseLandmarkerHelper 的运行状态
     fun isClose(): Boolean {
         return poseLandmarker == null
     }
 
-    // Initialize the Pose landmarker using current settings on the
-    // thread that is using it. CPU can be used with Landmarker
-    // that are created on the main thread and used on a background thread, but
-    // the GPU delegate needs to be used on the thread that initialized the
-    // Landmarker
+    // 在使用它的线程上使用当前设置初始化姿态标记器。CPU 可以用于在主线程上创建并在后台线程使用的标记器，但 GPU 委托需要在初始化标记器的线程上使用
     fun setupPoseLandmarker() {
-        // Set general pose landmarker options
+        // 设置通用姿态标记器选项
         val baseOptionBuilder = BaseOptions.builder()
 
-        // Use the specified hardware for running the model. Default to CPU
+        // 使用指定的硬件运行模型。默认为 CPU
         when (currentDelegate) {
             DELEGATE_CPU -> {
                 baseOptionBuilder.setDelegate(Delegate.CPU)
@@ -91,7 +87,7 @@ class PoseLandmarkerHelper(
 
         baseOptionBuilder.setModelAssetPath(modelName)
 
-        // Check if runningMode is consistent with poseLandmarkerHelperListener
+        // 检查 runningMode 是否与 poseLandmarkerHelperListener 一致
         when (runningMode) {
             RunningMode.LIVE_STREAM -> {
                 if (poseLandmarkerHelperListener == null) {
@@ -107,8 +103,7 @@ class PoseLandmarkerHelper(
 
         try {
             val baseOptions = baseOptionBuilder.build()
-            // Create an option builder with base options and specific
-            // options only use for Pose Landmarker.
+            // 使用基本选项和仅用于姿态标记器的特定选项创建选项构建器。
             val optionsBuilder =
                 PoseLandmarker.PoseLandmarkerOptions.builder()
                     .setBaseOptions(baseOptions)
@@ -118,7 +113,7 @@ class PoseLandmarkerHelper(
                     .setMinPosePresenceConfidence(minPosePresenceConfidence)
                     .setRunningMode(runningMode)
 
-            // The ResultListener and ErrorListener only use for LIVE_STREAM mode.
+            // ResultListener 和 ErrorListener 仅用于 LIVE_STREAM 模式。
             if (runningMode == RunningMode.LIVE_STREAM) {
                 optionsBuilder
                     .setResultListener(this::returnLivestreamResult)
@@ -130,27 +125,27 @@ class PoseLandmarkerHelper(
                 PoseLandmarker.createFromOptions(context, options)
         } catch (e: IllegalStateException) {
             poseLandmarkerHelperListener?.onError(
-                "Pose Landmarker failed to initialize. See error logs for " +
-                        "details"
+                "姿态标记器初始化失败。请参阅错误日志了解" +
+                        "详细信息"
             )
             Log.e(
-                TAG, "MediaPipe failed to load the task with error: " + e
+                TAG, "MediaPipe 加载任务失败，错误：" + e
                     .message
             )
         } catch (e: RuntimeException) {
-            // This occurs if the model being used does not support GPU
+            // 当使用的模型不支持 GPU 时会发生这种情况
             poseLandmarkerHelperListener?.onError(
-                "Pose Landmarker failed to initialize. See error logs for " +
-                        "details", GPU_ERROR
+                "姿态标记器初始化失败。请参阅错误日志了解" +
+                        "详细信息", GPU_ERROR
             )
             Log.e(
                 TAG,
-                "Image classifier failed to load model with error: " + e.message
+                "图像分类器加载模型失败，错误：" + e.message
             )
         }
     }
 
-    // Convert the ImageProxy to MP Image and feed it to PoselandmakerHelper.
+    // 将 ImageProxy 转换为 MP Image 并传递给 PoselandmakerHelper。
     fun detectLiveStream(
         imageProxy: ImageProxy,
         isFrontCamera: Boolean
@@ -163,7 +158,7 @@ class PoseLandmarkerHelper(
         }
         val frameTime = SystemClock.uptimeMillis()
 
-        // Copy out RGB bits from the frame to a bitmap buffer
+        // 将帧的 RGB 数据复制到位图缓冲区
         val bitmapBuffer =
             Bitmap.createBitmap(
                 imageProxy.width,
@@ -175,10 +170,10 @@ class PoseLandmarkerHelper(
         imageProxy.close()
 
         val matrix = Matrix().apply {
-            // Rotate the frame received from the camera to be in the same direction as it'll be shown
+            // 旋转从相机接收的帧，使其与显示方向一致
             postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
 
-            // flip image if user use front camera
+            // 如果用户使用前置相机则翻转图像
             if (isFrontCamera) {
                 postScale(
                     -1f,
@@ -193,24 +188,20 @@ class PoseLandmarkerHelper(
             matrix, true
         )
 
-        // Convert the input Bitmap object to an MPImage object to run inference
+        // 将输入的位图对象转换为 MPImage 对象以运行推理
         val mpImage = BitmapImageBuilder(rotatedBitmap).build()
 
         detectAsync(mpImage, frameTime)
     }
 
-    // Run pose landmark using MediaPipe Pose Landmarker API
+    // 使用 MediaPipe 姿态标记器 API 运行姿态标记
     @VisibleForTesting
     fun detectAsync(mpImage: MPImage, frameTime: Long) {
         poseLandmarker?.detectAsync(mpImage, frameTime)
-        // As we're using running mode LIVE_STREAM, the landmark result will
-        // be returned in returnLivestreamResult function
+        // 因为我们使用 LIVE_STREAM 运行模式，标记结果将通过 returnLivestreamResult 函数返回
     }
 
-    // Accepts the URI for a video file loaded from the user's gallery and attempts to run
-    // pose landmarker inference on the video. This process will evaluate every
-    // frame in the video and attach the results to a bundle that will be
-    // returned.
+    // 接受从用户图库加载的视频文件 URI，并尝试在视频上运行姿态标记推理。此过程将评估视频中的每一帧，并将结果附加到将要返回的包中。
     fun detectVideoFile(
         videoUri: Uri,
         inferenceIntervalMs: Long
@@ -222,8 +213,7 @@ class PoseLandmarkerHelper(
             )
         }
 
-        // Inference time is the difference between the system time at the start and finish of the
-        // process
+        // 推理时间是进程开始和结束时的系统时间差
         val startTime = SystemClock.uptimeMillis()
 
         var didErrorOccurred = false
@@ -235,9 +225,7 @@ class PoseLandmarkerHelper(
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLong()
 
-        // Note: We need to read width/height from frame instead of getting the width/height
-        // of the video directly because MediaRetriever returns frames that are smaller than the
-        // actual dimension of the video file.
+        // 注意：我们需要从帧中读取宽度/高度，而不是直接获取视频的宽度/高度，因为 MediaRetriever 返回的帧比视频文件的实际尺寸小。
         val firstFrame = retriever.getFrameAtTime(0)
         val width = firstFrame?.width
         val height = firstFrame?.height
@@ -273,16 +261,16 @@ class PoseLandmarkerHelper(
                         } ?: {
                         didErrorOccurred = true
                         poseLandmarkerHelperListener?.onError(
-                            "ResultBundle could not be returned" +
-                                    " in detectVideoFile"
+                            "无法在 detectVideoFile 中返回" +
+                                    "结果包"
                         )
                     }
                 }
                 ?: run {
                     didErrorOccurred = true
                     poseLandmarkerHelperListener?.onError(
-                        "Frame at specified time could not be" +
-                                " retrieved when detecting in video."
+                        "在视频中检测时无法检索到指定时间的" +
+                                "帧。"
                     )
                 }
         }
@@ -336,7 +324,7 @@ class PoseLandmarkerHelper(
         return null
     }
 
-    // Return the landmark result to this PoseLandmarkerHelper's caller
+    // 将标记结果返回给此 PoseLandmarkerHelper 的调用者
     private fun returnLivestreamResult(
         result: PoseLandmarkerResult,
         input: MPImage
@@ -354,8 +342,7 @@ class PoseLandmarkerHelper(
         )
     }
 
-    // Return errors thrown during detection to this PoseLandmarkerHelper's
-    // caller
+    // 将检测期间抛出的错误返回给此 PoseLandmarkerHelper 的调用者
     private fun returnLivestreamError(error: RuntimeException) {
         poseLandmarkerHelperListener?.onError(
             error.message ?: "An unknown error has occurred"
