@@ -22,17 +22,29 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.google.mediapipe.examples.poselandmarker.R
+import java.util.concurrent.ConcurrentLinkedQueue
 
 class EventAdapter(
     private val eventDisplayDurationMs: Long = 2000L,
     private val maxQueueSize: Int = 6
 ) : RecyclerView.Adapter<EventAdapter.EventViewHolder>() {
 
-    private data class EventItem(val message: String)
+    private data class EventItem(
+        val message: String,
+        val id: Long = System.nanoTime()  // 唯一ID，用于标识事件
+    )
 
     private val events = mutableListOf<EventItem>()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val removalCallbacks = mutableMapOf<EventItem, Runnable>()
+    
+    // 使用线程安全的队列来管理移除回调
+    private val pendingRemovals = ConcurrentLinkedQueue<Long>()
+    
+    // 用于同步访问events列表的锁对象
+    private val eventsLock = Any()
+    
+    // 用于生成唯一ID的计数器
+    private var eventIdCounter: Long = 0L
 
     inner class EventViewHolder(val textView: TextView) : RecyclerView.ViewHolder(textView)
 
@@ -43,57 +55,83 @@ class EventAdapter(
     }
 
     override fun onBindViewHolder(holder: EventViewHolder, position: Int) {
-        holder.textView.text = events[position].message
+        synchronized(eventsLock) {
+            if (position < events.size) {
+                holder.textView.text = events[position].message
+            }
+        }
     }
 
-    override fun getItemCount(): Int = events.size
+    override fun getItemCount(): Int {
+        synchronized(eventsLock) {
+            return events.size
+        }
+    }
 
     fun addEvent(eventMessage: String) {
-        // If queue is full, remove the oldest item
-        if (events.size >= maxQueueSize) {
-            removeEventAt(0)
+        // 确保在主线程执行
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { addEvent(eventMessage) }
+            return
         }
 
-        val eventItem = EventItem(eventMessage)
-        events.add(eventItem)
-        val position = events.size - 1
-        notifyItemInserted(position)
+        synchronized(eventsLock) {
+            // 如果队列已满，立即移除最旧的事件
+            while (events.size >= maxQueueSize) {
+                if (events.isNotEmpty()) {
+                    val oldestEvent = events.removeAt(0)
+                    pendingRemovals.add(oldestEvent.id)  // 标记为待移除，取消其回调
+                    notifyItemRemoved(0)
+                }
+            }
 
-        // Schedule removal after display duration
-        scheduleRemoval(eventItem)
+            // 添加新事件
+            val eventItem = EventItem(eventMessage, ++eventIdCounter)
+            events.add(eventItem)
+            val position = events.size - 1
+            notifyItemInserted(position)
+
+            // 调度延迟移除
+            scheduleRemoval(eventItem)
+        }
     }
 
     private fun scheduleRemoval(eventItem: EventItem) {
         val removal = Runnable {
-            removeEvent(eventItem)
+            removeEventById(eventItem.id)
         }
-        removalCallbacks[eventItem] = removal
         mainHandler.postDelayed(removal, eventDisplayDurationMs)
     }
 
-    private fun removeEvent(eventItem: EventItem) {
-        // Cancel any existing removal callback
-        removalCallbacks.remove(eventItem)?.let { mainHandler.removeCallbacks(it) }
+    private fun removeEventById(eventId: Long) {
+        // 确保在主线程执行
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { removeEventById(eventId) }
+            return
+        }
 
-        val position = events.indexOf(eventItem)
-        if (position >= 0) {
-            events.removeAt(position)
-            notifyItemRemoved(position)
+        synchronized(eventsLock) {
+            // 检查是否已经被标记为移除（被新事件挤出）
+            if (pendingRemovals.contains(eventId)) {
+                pendingRemovals.remove(eventId)
+                return  // 已经被移除，跳过
+            }
+
+            // 查找并移除事件
+            val position = events.indexOfFirst { it.id == eventId }
+            if (position >= 0) {
+                events.removeAt(position)
+                notifyItemRemoved(position)
+            }
         }
     }
 
-    private fun removeEventAt(position: Int) {
-        if (position < 0 || position >= events.size) return
-        
-        val eventItem = events[position]
-        removeEvent(eventItem)
-    }
-
     fun clearAll() {
-        removalCallbacks.values.forEach { mainHandler.removeCallbacks(it) }
-        removalCallbacks.clear()
-        val size = events.size
-        events.clear()
-        notifyItemRangeRemoved(0, size)
+        synchronized(eventsLock) {
+            val size = events.size
+            events.clear()
+            pendingRemovals.clear()
+            notifyItemRangeRemoved(0, size)
+        }
     }
 }

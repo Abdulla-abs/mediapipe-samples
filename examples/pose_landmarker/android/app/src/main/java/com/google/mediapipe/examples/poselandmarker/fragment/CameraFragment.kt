@@ -192,7 +192,31 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     }
 
     private fun initCameraControls() {
-        fragmentCameraBinding.cameraFlipButton.visibility = View.GONE
+        // 设置摄像头翻转按钮可见性
+        fragmentCameraBinding.cameraFlipButton.visibility = View.VISIBLE
+        
+        // 添加翻转摄像头点击事件
+        fragmentCameraBinding.cameraFlipButton.setOnClickListener {
+            flipCamera()
+        }
+    }
+
+    /**
+     * 翻转摄像头（前置 <-> 后置）
+     */
+    private fun flipCamera() {
+        // 切换摄像头方向
+        cameraFacing = if (cameraFacing == CameraSelector.LENS_FACING_FRONT) {
+            CameraSelector.LENS_FACING_BACK
+        } else {
+            CameraSelector.LENS_FACING_FRONT
+        }
+        
+        // 更新ViewModel中的摄像头方向
+        viewModel.setCameraFacing(cameraFacing)
+        
+        // 重新绑定相机用例
+        bindCameraUseCases()
     }
 
     private fun applyEventBannerInsets() {
@@ -496,9 +520,11 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
         val side = if (event.side.name == "LEFT") "左侧" else "右侧"
         val action = when (event.type) {
             PoseActionType.ARM_RAISE_START -> "抬手开始"
-            PoseActionType.ARM_RAISE_END -> "放下开始"
+            PoseActionType.ARM_RAISE_END -> "抬手结束"
             PoseActionType.ARM_WAVE_START -> "挥动开始"
             PoseActionType.ARM_WAVE_END -> "挥动结束"
+            PoseActionType.BODY_MOVE_LEFT -> "向左移动"
+            PoseActionType.BODY_MOVE_RIGHT -> "向右移动"
         }
         return "$side $action"
     }

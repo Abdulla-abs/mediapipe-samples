@@ -57,10 +57,5 @@
         android:id="@+id/bottom_sheet_layout"
         layout="@layout/info_bottom_sheet" />
 
-    <SearchView
-        android:imeOptions="actionSearch"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        app:iconifiedByDefault="false"/>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

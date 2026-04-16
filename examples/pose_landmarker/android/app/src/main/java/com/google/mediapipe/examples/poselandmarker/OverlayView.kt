@@ -35,6 +35,14 @@ class OverlayView(context: Context?, attrs: AttributeSet?) :
     private var pointPaint = Paint()
     private var linePaint = Paint()
 
+    // 为不同的人使用不同的颜色
+    private val personColors = listOf(
+        Color.YELLOW,        // 人员0：黄色
+        Color.CYAN,          // 人员1：青色
+        Color.MAGENTA,       // 人员2：洋红色（如果需要更多人）
+        Color.GREEN          // 人员3：绿色
+    )
+
     private var scaleFactor: Float = 1f
     private var imageWidth: Int = 1
     private var imageHeight: Int = 1
@@ -52,12 +60,9 @@ class OverlayView(context: Context?, attrs: AttributeSet?) :
     }
 
     private fun initPaints() {
-        linePaint.color =
-            ContextCompat.getColor(context!!, R.color.mp_color_primary)
         linePaint.strokeWidth = LANDMARK_STROKE_WIDTH
         linePaint.style = Paint.Style.STROKE
 
-        pointPaint.color = Color.YELLOW
         pointPaint.strokeWidth = LANDMARK_STROKE_WIDTH
         pointPaint.style = Paint.Style.FILL
     }
@@ -65,7 +70,17 @@ class OverlayView(context: Context?, attrs: AttributeSet?) :
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
         results?.let { poseLandmarkerResult ->
-            for(landmark in poseLandmarkerResult.landmarks()) {
+            // 遍历所有检测到的人
+            for ((personIndex, landmark) in poseLandmarkerResult.landmarks().withIndex()) {
+                // 为不同的人选择不同的颜色
+                val personColor = personColors.getOrElse(personIndex) { 
+                    Color.WHITE  // 默认白色
+                }
+                
+                pointPaint.color = personColor
+                linePaint.color = personColor
+                
+                // 绘制该人的所有关键点
                 for(normalizedLandmark in landmark) {
                     canvas.drawPoint(
                         normalizedLandmark.x() * imageWidth * scaleFactor,
@@ -74,12 +89,13 @@ class OverlayView(context: Context?, attrs: AttributeSet?) :
                     )
                 }
 
+                // 绘制该人的骨架连线
                 PoseLandmarker.POSE_LANDMARKS.forEach {
                     canvas.drawLine(
-                        poseLandmarkerResult.landmarks().get(0).get(it!!.start()).x() * imageWidth * scaleFactor,
-                        poseLandmarkerResult.landmarks().get(0).get(it.start()).y() * imageHeight * scaleFactor,
-                        poseLandmarkerResult.landmarks().get(0).get(it.end()).x() * imageWidth * scaleFactor,
-                        poseLandmarkerResult.landmarks().get(0).get(it.end()).y() * imageHeight * scaleFactor,
+                        landmark[it!!.start()].x() * imageWidth * scaleFactor,
+                        landmark[it.start()].y() * imageHeight * scaleFactor,
+                        landmark[it.end()].x() * imageWidth * scaleFactor,
+                        landmark[it.end()].y() * imageHeight * scaleFactor,
                         linePaint)
                 }
             }

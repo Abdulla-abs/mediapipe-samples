@@ -357,7 +357,7 @@ class PoseLandmarkerHelper(
         const val DEFAULT_POSE_DETECTION_CONFIDENCE = 0.5F
         const val DEFAULT_POSE_TRACKING_CONFIDENCE = 0.5F
         const val DEFAULT_POSE_PRESENCE_CONFIDENCE = 0.5F
-        const val DEFAULT_NUM_POSES = 1
+        const val DEFAULT_NUM_POSES = 2
         const val OTHER_ERROR = 0
         const val GPU_ERROR = 1
         const val MODEL_POSE_LANDMARKER_FULL = 0
