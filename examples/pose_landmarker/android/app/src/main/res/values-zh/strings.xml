@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ~ Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+    ~
+    ~ Licensed under the Apache License, Version 2.0 (the "License");
+    ~ you may not use this file except in compliance with the License.
+    ~ You may obtain a copy of the License at
+    ~
+    ~       http://www.apache.org/licenses/LICENSE-2.0
+    ~
+    ~ Unless required by applicable law or agreed to in writing, software
+    ~ distributed under the License is distributed on an "AS IS" BASIS,
+    ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    ~ See the License for the specific language governing permissions and
+    ~ limitations under the License.
+-->
+<resources>
+    <string name="app_name">姿态识别器</string>
+
+    <string name="media_pipe">MediaPipe</string>
+
+    <string name="alt_bottom_sheet_chevron">底部设置页展开指示器</string>
+
+    <string name="alt_bottom_sheet_max_results_button_minus">减少最大姿态结果数按钮</string>
+    <string name="alt_bottom_sheet_max_results_button_plus">增加最大姿态结果数按钮</string>
+    <string name="alt_bottom_sheet_threshold_button_minus">降低姿态检测阈值按钮</string>
+    <string name="alt_bottom_sheet_threshold_button_plus">提高姿态检测阈值按钮</string>
+    <string name="menu_camera">相机</string>
+    <string name="menu_gallery">相册</string>
+    <string name="tv_gallery_placeholder">点击 + 添加图片或视频开始姿态识别</string>
+
+    <string name="label_inference_time">推理时间</string>
+    <string name="label_fps">每秒帧数</string>
+    <string name="label_pose_detection_confidence_threshold">检测阈值</string>
+    <string name="label_pose_tracking_confidence_threshold">跟踪阈值</string>
+    <string name="label_pose_presence_confidence_threshold">存在阈值</string>
+    <string name="label_num_poses">姿态数量</string>
+    <string name="label_delegate">处理器</string>
+    <string name="label_models">模型</string>
+
+    <string name="alt_flip_camera">翻转摄像头</string>
+
+    <string-array name="delegate_spinner_titles">
+        <item>CPU</item>
+        <item>GPU</item>
+    </string-array>
+
+    <string-array name="models_spinner_titles">
+        <item>姿态识别器（完整版）</item>
+        <item>姿态识别器（轻量版）</item>
+        <item>姿态识别器（增强版）</item>
+    </string-array>
+</resources>
