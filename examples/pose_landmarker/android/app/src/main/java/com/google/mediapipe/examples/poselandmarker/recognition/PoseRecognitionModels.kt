@@ -7,7 +7,7 @@ enum class BodySide {
 
 enum class PoseActionType {
     ARM_RAISE_START,
-    ARM_LOWER_START,
+    ARM_RAISE_END,
     ARM_WAVE_START,
     ARM_WAVE_END
 }

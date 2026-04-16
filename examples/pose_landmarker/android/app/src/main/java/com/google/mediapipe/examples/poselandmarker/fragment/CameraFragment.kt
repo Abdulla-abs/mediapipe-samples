@@ -496,7 +496,7 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
         val side = if (event.side.name == "LEFT") "左侧" else "右侧"
         val action = when (event.type) {
             PoseActionType.ARM_RAISE_START -> "抬手开始"
-            PoseActionType.ARM_LOWER_START -> "放下开始"
+            PoseActionType.ARM_RAISE_END -> "放下开始"
             PoseActionType.ARM_WAVE_START -> "挥动开始"
             PoseActionType.ARM_WAVE_END -> "挥动结束"
         }

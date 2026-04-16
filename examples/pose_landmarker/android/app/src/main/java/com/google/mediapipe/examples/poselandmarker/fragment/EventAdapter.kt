@@ -24,8 +24,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.mediapipe.examples.poselandmarker.R
 
 class EventAdapter(
-    private val eventDisplayDurationMs: Long = 1000L,
-    private val maxQueueSize: Int = 10
+    private val eventDisplayDurationMs: Long = 2000L,
+    private val maxQueueSize: Int = 6
 ) : RecyclerView.Adapter<EventAdapter.EventViewHolder>() {
 
     private data class EventItem(val message: String)
