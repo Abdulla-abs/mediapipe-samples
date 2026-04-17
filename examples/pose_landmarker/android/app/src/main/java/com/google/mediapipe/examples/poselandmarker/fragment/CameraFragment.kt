@@ -517,7 +517,6 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
     }
 
     private fun formatEvent(event: PoseActionEvent): String {
-        val side = if (event.side.name == "LEFT") "左侧" else "右侧"
         val action = when (event.type) {
             PoseActionType.ARM_RAISE_START -> "抬手开始"
             PoseActionType.ARM_RAISE_END -> "抬手结束"
@@ -525,8 +524,14 @@ class CameraFragment : Fragment(), PoseLandmarkerHelper.LandmarkerListener {
             PoseActionType.ARM_WAVE_END -> "挥动结束"
             PoseActionType.BODY_MOVE_LEFT -> "向左移动"
             PoseActionType.BODY_MOVE_RIGHT -> "向右移动"
+            PoseActionType.BODY_JUMP -> "跳起"
         }
-        return "$side $action"
+        return if (event.side == null){
+            action
+        } else{
+            val side = if (event.side.name == "LEFT") "左侧" else "右侧"
+            "$side $action"
+        }
     }
 
 }

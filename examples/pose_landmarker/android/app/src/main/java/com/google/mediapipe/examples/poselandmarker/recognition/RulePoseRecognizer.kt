@@ -12,6 +12,7 @@ import kotlin.math.sqrt
  * - 抬手动作结束（ARM_RAISE_END）
  * - 身体向左移动（BODY_MOVE_LEFT）
  * - 身体向右移动（BODY_MOVE_RIGHT）
+ * - 身体跳起（BODY_JUMP）
  * 
  * 通过分析姿态关键点的位置，识别特定的手势动作。
  * 支持左右两侧独立识别，并使用指数移动平均（EMA）进行平滑处理。
@@ -21,6 +22,11 @@ import kotlin.math.sqrt
  * - 通过跟踪身体中心点（双肩中点）的水平位置变化来检测移动方向
  * - 使用归一化位移量（相对于肩宽）来判断有效移动，适应不同距离的拍摄场景
  * - 采用状态机管理检测过程，包含持续帧数验证和冷却机制，确保检测稳定可靠
+ * 
+ * 跳起检测原理：
+ * - 通过跟踪髋部中心的垂直位置变化来检测跳起动作
+ * - 当髋部Y坐标显著减小（向上移动）时判定为跳起
+ * - 使用髋部到脚踝的距离作为参考尺度来归一化跳起高度
  */
 class RulePoseRecognizer(
     private val config: Config = Config(),
@@ -40,6 +46,9 @@ class RulePoseRecognizer(
      * @param bodyMoveThreshold 身体中心水平移动距离阈值（归一化），用于判断是否发生有效位移
      * @param bodyMoveHoldFrames 身体移动需要持续的帧数，确保是稳定移动而非抖动
      * @param bodyMoveCooldownFrames 移动检测后的冷却帧数，避免重复检测同一动作
+     * @param jumpHeightThreshold 跳起高度阈值（归一化），相对于髋部到脚踝的距离
+     * @param jumpHoldFrames 跳起需要持续的帧数
+     * @param jumpCooldownFrames 跳起检测后的冷却帧数
      */
     data class Config(
         val emaAlpha: Float = 0.35f,
@@ -50,9 +59,13 @@ class RulePoseRecognizer(
         val wristBelowShoulderThreshold: Float = 0.30f,
         val minArmLengthThreshold: Float = 0.62f,
         // 左右移动识别相关参数
-        val bodyMoveThreshold: Float = 0.1f,           // 身体中心水平移动距离阈值（相对于肩宽）
+        val bodyMoveThreshold: Float = 0.15f,           // 身体中心水平移动距离阈值（相对于肩宽）
         val bodyMoveHoldFrames: Int = 3,                 // 移动持续帧数要求
-        val bodyMoveCooldownFrames: Int = 10             // 冷却帧数
+        val bodyMoveCooldownFrames: Int = 10,            // 冷却帧数
+        // 跳起识别相关参数
+        val jumpHeightThreshold: Float = 0.3f,          // 跳起高度阈值（相对于髋部到脚踝距离）
+        val jumpHoldFrames: Int = 3,                    // 跳起持续帧数要求
+        val jumpCooldownFrames: Int = 15                // 跳起冷却帧数
     )
 
     // 当前帧索引，用于跟踪时间序列
@@ -75,7 +88,18 @@ class RulePoseRecognizer(
             BodySide.LEFT to SideState(),
             BodySide.RIGHT to SideState()
         ),
-        val bodyMoveState: BodyMoveState = BodyMoveState()             // 身体移动状态
+        val bodyMoveState: BodyMoveState = BodyMoveState(),            // 身体移动状态
+        val jumpState: JumpState = JumpState()                         // 跳起状态
+    )
+
+    /**
+     * 跳起检测状态
+     */
+    private data class JumpState(
+        var baselineHipY: Float? = null,          // 基准髋部Y坐标（站立时的高度）
+        var jumpCount: Int = 0,                   // 跳起累计帧数
+        var cooldownCounter: Int = 0,             // 冷却倒计时
+        var isJumping: Boolean = false            // 是否正在跳起
     )
 
     /**
@@ -157,6 +181,17 @@ class RulePoseRecognizer(
                 bodyScale = bodyScale,
                 timestampMs = timestampMs,
                 bodyMoveState = personState.bodyMoveState,
+                events = allEvents
+            )
+
+            // 检测跳起动作
+            evaluateJump(
+                personId = personId,
+                smoothedPose = smoothedPose,
+                leftHip = leftHip,
+                rightHip = rightHip,
+                timestampMs = timestampMs,
+                jumpState = personState.jumpState,
                 events = allEvents
             )
         }
@@ -309,7 +344,7 @@ class RulePoseRecognizer(
 
                 // 如果向左移动持续足够帧数，触发左移事件
                 if (bodyMoveState.leftMoveCount >= config.bodyMoveHoldFrames) {
-                    events.add(createEvent(PoseActionType.BODY_MOVE_LEFT, BodySide.LEFT, timestampMs, personId))
+                    events.add(createEvent(PoseActionType.BODY_MOVE_LEFT, null, timestampMs, personId))
                     resetBodyMovement("left", bodyMoveState)
                 }
             }
@@ -320,7 +355,7 @@ class RulePoseRecognizer(
 
                 // 如果向右移动持续足够帧数，触发右移事件
                 if (bodyMoveState.rightMoveCount >= config.bodyMoveHoldFrames) {
-                    events.add(createEvent(PoseActionType.BODY_MOVE_RIGHT, BodySide.RIGHT, timestampMs, personId))
+                    events.add(createEvent(PoseActionType.BODY_MOVE_RIGHT, null, timestampMs, personId))
                     resetBodyMovement("right", bodyMoveState)
                 }
             }
@@ -349,6 +384,116 @@ class RulePoseRecognizer(
         bodyMoveState.cooldownCounter = config.bodyMoveCooldownFrames
         bodyMoveState.lastMoveDirection = direction
         // 注意：不在这里重置baselineCenterX，而是在冷却期结束后再更新
+    }
+
+    /**
+     * 检测跳起动作
+     *
+     * 跳起检测原理：
+     * 1. 记录站立时髋部的基准Y坐标（髋部在图像中的垂直位置）
+     * 2. 当髋部Y坐标显著减小（即髋部向上移动，因为在图像坐标系中Y轴向下）
+     *    且移动距离超过阈值时，判定为跳起
+     * 3. 使用髋部到脚踝的距离作为参考尺度来归一化跳起高度
+     *
+     * @param personId 人员ID
+     * @param smoothedPose 平滑后的姿态关键点
+     * @param leftHip 左髋位置
+     * @param rightHip 右髋位置
+     * @param timestampMs 时间戳（毫秒）
+     * @param jumpState 跳起状态
+     * @param events 动作事件列表，用于收集检测到的事件
+     */
+    private fun evaluateJump(
+        personId: Int,
+        smoothedPose: Array<Point>,
+        leftHip: Point,
+        rightHip: Point,
+        timestampMs: Long,
+        jumpState: JumpState,
+        events: MutableList<PoseActionEvent>
+    ) {
+        // 冷却期倒计时
+        if (jumpState.cooldownCounter > 0) {
+            jumpState.cooldownCounter--
+            // 冷却期结束时重置基准位置，需要重新建立基准
+            if (jumpState.cooldownCounter == 0) {
+                jumpState.baselineHipY = null
+            }
+            return
+        }
+
+        // 获取脚踝关键点
+        val leftAnkle = smoothedPose[Landmark.LEFT_ANKLE]
+        val rightAnkle = smoothedPose[Landmark.RIGHT_ANKLE]
+
+        // 计算当前髋部中心Y坐标（髋部中心位置）
+        val currentHipCenterY = (leftHip.y + rightHip.y) / 2f
+
+        // 计算参考尺度：髋部到脚踝的平均距离
+        // 这个距离代表人的腿长，用于归一化跳起高度
+        val hipToAnkleDistance = if (leftAnkle != null && rightAnkle != null) {
+            val leftLegLength = distance(leftHip, leftAnkle)
+            val rightLegLength = distance(rightHip, rightAnkle)
+            (leftLegLength + rightLegLength) / 2f
+        } else {
+            // 如果脚踝不可见，使用一个默认参考值
+            0.2f
+        }
+
+        // 初始化基准髋部高度
+        if (jumpState.baselineHipY == null) {
+            jumpState.baselineHipY = currentHipCenterY
+            // 第一帧不进行检测，等待基准稳定
+            return
+        }
+
+        // 计算跳起高度：基准Y - 当前Y
+        // 注意：图像坐标系中Y轴向下
+        // - 跳起时：髋部上升，Y值减小，jumpHeight为正
+        // - 下蹲时：髋部下降，Y值增大，jumpHeight为负
+        val jumpHeight = jumpState.baselineHipY!! - currentHipCenterY
+
+        // 归一化跳起高度（相对于腿长）
+        val normalizedJumpHeight = if (hipToAnkleDistance > 0f) {
+            jumpHeight / hipToAnkleDistance
+        } else {
+            0f
+        }
+
+        // 检测跳起状态
+        if (normalizedJumpHeight > config.jumpHeightThreshold) {
+            // 髋部显著上升，正在跳起
+            jumpState.jumpCount++
+            jumpState.isJumping = true
+
+            // 达到持续帧数要求，触发跳起事件
+            if (jumpState.jumpCount >= config.jumpHoldFrames) {
+                events.add(createEvent(PoseActionType.BODY_JUMP, null, timestampMs, personId))
+                resetJump(jumpState)
+            }
+        } else {
+            // 未在跳起状态，重置计数
+            jumpState.jumpCount = 0
+            jumpState.isJumping = false
+
+            // 只有在没有跳起时才更新基准位置
+            // 使用较小的alpha缓慢更新，以适应站立时的微小移动
+            jumpState.baselineHipY = jumpState.baselineHipY!! * 0.9f + currentHipCenterY * 0.1f
+        }
+    }
+
+    /**
+     * 重置跳起检测状态
+     *
+     * 在检测到有效跳起后调用，进入冷却期以避免重复检测同一动作。
+     *
+     * @param jumpState 跳起状态
+     */
+    private fun resetJump(jumpState: JumpState) {
+        jumpState.jumpCount = 0
+        jumpState.isJumping = false
+        jumpState.cooldownCounter = config.jumpCooldownFrames
+        // 基准位置会在冷却期结束后重新初始化
     }
 
 
@@ -445,12 +590,12 @@ class RulePoseRecognizer(
      * 创建动作事件
      * 
      * @param type 动作类型
-     * @param side 身体侧边
+     * @param side 身体侧边（跳起和移动动作为null）
      * @param timestampMs 时间戳（毫秒）
      * @param personId 人员ID
      * @return 动作事件对象
      */
-    private fun createEvent(type: PoseActionType, side: BodySide, timestampMs: Long, personId: Int): PoseActionEvent {
+    private fun createEvent(type: PoseActionType, side: BodySide?, timestampMs: Long, personId: Int): PoseActionEvent {
         return PoseActionEvent(
             type = type,
             side = side,
@@ -502,6 +647,8 @@ class RulePoseRecognizer(
         const val RIGHT_HIP = 24       // 右髋
         const val LEFT_WRIST = 15      // 左手腕
         const val RIGHT_WRIST = 16     // 右手腕
+        const val LEFT_ANKLE = 27      // 左脚踝
+        const val RIGHT_ANKLE = 28     // 右脚踝
     }
 
     companion object {
